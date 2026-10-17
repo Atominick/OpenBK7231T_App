@@ -1,5 +1,42 @@
 # Docker Files for OpenBK7231T_App
 
+## Local LN882H builds on Windows
+
+With Docker Desktop running in Linux-container mode, run this from the repository root in PowerShell:
+
+```powershell
+.\scripts\build_ln882h.ps1
+```
+
+If PowerShell execution policy blocks the script, use:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build_ln882h.ps1
+```
+
+The script builds a snapshot of the current working files, including staged and
+unstaged edits, deletions, and new non-ignored files. No commit is needed.
+Ignored files are excluded. Submodules use the versions pinned by the main
+repository's current commit; local submodule edits are not included.
+Build tools and dependencies require internet access on the first run.
+
+The source is mounted read-only, and compilation runs in a temporary Linux
+checkout. Shell line endings are normalized only in that checkout. The script
+does not modify the working tree, its Git configuration, or its submodules.
+
+Images are built using Docker's layer cache. Each firmware build initializes
+fresh dependencies and removes its temporary container and snapshot afterward.
+Firmware is saved under `output\<version>`: the `.bin` file is for initial
+flashing, and `_OTA.bin` is for OTA updates.
+
+Optionally specify a version/output directory name:
+
+```powershell
+.\scripts\build_ln882h.ps1 -Version dev_my_test
+```
+
+## Multi-platform Docker builds
+
 This docker will build all or some of the platforms that OpenBeken supports. To use, first build the docker image:
 
 ```sh
