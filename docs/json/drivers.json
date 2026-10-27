@@ -274,7 +274,7 @@
   {
     "name": "BL0937",
     "title": "TODO",
-    "descr": "BL0937 is a power-metering chip which uses custom protocol to report data. It requires setting 3 pins in pin config: CF, CF1 and SEL",
+    "descr": "BL0937 is a power-metering chip which uses custom protocol to report data. It requires setting 3 pins in pin config: CF, CF1 and SEL. On LN882H, fast voltage monitoring keeps SEL on voltage and turns off all configured relay outputs after 5 ms without CF1 pulses; current measurements are unavailable in this mode. Use BL0937FastLog 10 to stream CSV voltage estimates over UART every 10 ms (5-1000 ms supported, 0 disables). Verify the pulse timeout and physical relay contact delay on the target hardware.",
     "requires": "",
     "define": "Enabled by defining \"<b>ENABLE_DRIVER_BL0937</b>\" for your platform in [obk_config.h](https://github.com/openshwprojects/OpenBK7231T_App/blob/main/src/obk_config.h) "
   },

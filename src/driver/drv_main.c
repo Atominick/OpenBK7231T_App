@@ -685,14 +685,14 @@ static driver_t g_drivers[] = {
 #if ENABLE_DRIVER_BL0937
 	//drvdetail:{"name":"BL0937",
 	//drvdetail:"title":"TODO",
-	//drvdetail:"descr":"BL0937 is a power-metering chip which uses custom protocol to report data. It requires setting 3 pins in pin config: CF, CF1 and SEL",
+	//drvdetail:"descr":"BL0937 is a power-metering chip which uses custom protocol to report data. It requires setting 3 pins in pin config: CF, CF1 and SEL. On LN882H, fast voltage monitoring keeps SEL on voltage and turns off all configured relay outputs after 5 ms without CF1 pulses; current measurements are unavailable in this mode. Use BL0937FastLog 10 to stream CSV voltage estimates over UART every 10 ms (5-1000 ms supported, 0 disables). Verify the pulse timeout and physical relay contact delay on the target hardware.",
 	//drvdetail:"requires":""}
 	{ "BL0937",                              // Driver Name
 	BL0937_Init,                             // Init
 	BL0937_RunEverySecond,                   // onEverySecond
 	BL09XX_AppendInformationToHTTPIndexPage, // appendInformationToHTTPIndexPage
-	NULL,                                    // runQuickTick
-	NULL,                                    // stopFunction
+	BL0937_RunQuickTick,                     // runQuickTick
+	BL0937_Shutdown,                         // stopFunction
 	NULL,                                    // onChannelChanged
 	NULL,                                    // onHassDiscovery
 	false,                                   // loaded
