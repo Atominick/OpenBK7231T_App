@@ -1699,6 +1699,71 @@ void CHANNEL_SetSmart(int ch, float fVal, int iFlags) {
 	CHANNEL_Set(ch, divided, iFlags);
 }
 
+// Relay inhibit: while any source (power-fail detector, sentinel guard) is active,
+// relay channels are held at 0 and requested values are remembered. When the last
+// source is released, OBK_FLAG_POWER_FAIL_RESTORE_RELAYS decides whether the
+// remembered values are applied or relays stay off.
+static int g_relayInhibitMask;
+static int g_relayRequestedValues[CHANNEL_MAX];
+
+static bool CHANNEL_IsRelayChannel(int ch) {
+	int i;
+	for (i = 0; i < PLATFORM_GPIO_MAX; i++) {
+		int role = g_cfg.pins.roles[i];
+		if (g_cfg.pins.channels[i] == ch && (role == IOR_Relay || role == IOR_Relay_n
+			|| role == IOR_BAT_Relay || role == IOR_BAT_Relay_n)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+int CHANNEL_GetRelayInhibit() {
+	return g_relayInhibitMask;
+}
+
+void CHANNEL_SetRelayInhibit(int source, bool bInhibit) {
+	int ch;
+	int prevMask = g_relayInhibitMask;
+	bool restore;
+
+	if (bInhibit) {
+		if (prevMask & source) {
+			return;
+		}
+		if (prevMask == 0) {
+			// Switch off before the mask is set, so these writes are not taken as requests.
+			for (ch = 0; ch < CHANNEL_MAX; ch++) {
+				g_relayRequestedValues[ch] = g_channelValues[ch];
+				if (CHANNEL_IsRelayChannel(ch)) {
+					CHANNEL_Set(ch, 0, CHANNEL_SET_FLAG_FORCE);
+				}
+			}
+		}
+		g_relayInhibitMask |= source;
+		addLogAdv(LOG_WARN, LOG_FEATURE_GENERAL, "Relays inhibited (sources 0x%x)", g_relayInhibitMask);
+		return;
+	}
+	if ((prevMask & source) == 0) {
+		return;
+	}
+	g_relayInhibitMask &= ~source;
+	if (g_relayInhibitMask) {
+		addLogAdv(LOG_WARN, LOG_FEATURE_GENERAL, "Relay inhibit source 0x%x released, still inhibited by 0x%x",
+			source, g_relayInhibitMask);
+		return;
+	}
+	restore = CFG_HasFlag(OBK_FLAG_POWER_FAIL_RESTORE_RELAYS);
+	for (ch = 0; ch < CHANNEL_MAX; ch++) {
+		if (CHANNEL_IsRelayChannel(ch)) {
+			// FORCE re-drives GPIOs that a driver may have switched off directly.
+			CHANNEL_Set(ch, restore ? g_relayRequestedValues[ch] : 0, CHANNEL_SET_FLAG_FORCE);
+		}
+	}
+	addLogAdv(LOG_WARN, LOG_FEATURE_GENERAL, "Relay inhibit released: %s",
+		restore ? "relays restored to requested state" : "relays stay off (flag 52 not set)");
+}
+
 void CHANNEL_Set_Ex(int ch, int iVal, int iFlags, int ausemovingaverage) {
 	int prevValue;
 	int bForce;
@@ -1734,6 +1799,14 @@ void CHANNEL_Set_Ex(int ch, int iVal, int iFlags, int ausemovingaverage) {
 		addLogAdv(LOG_ERROR, LOG_FEATURE_GENERAL, "CHANNEL_Set: Channel index %i is out of range <0,%i)", ch, CHANNEL_MAX);
 		//}
 		return;
+	}
+	if (g_relayInhibitMask && CHANNEL_IsRelayChannel(ch)) {
+		g_relayRequestedValues[ch] = iVal;
+		if (iVal != 0) {
+			addLogAdv(LOG_WARN, LOG_FEATURE_GENERAL, "Relay channel %i held off (inhibit 0x%x), request %i remembered",
+				ch, g_relayInhibitMask, iVal);
+			iVal = 0;
+		}
 	}
 	prevValue = g_channelValues[ch];
 	if (bForce == 0) {

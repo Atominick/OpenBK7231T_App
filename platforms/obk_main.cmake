@@ -143,6 +143,7 @@ set(OBKM_SRC
 	${OBK_SRCS}driver/drv_ssdp.c
 	${OBK_SRCS}driver/drv_ssd1306.c
 	${OBK_SRCS}driver/drv_tasmotaDeviceGroups.c
+	${OBK_SRCS}driver/drv_sentinel.c
 	${OBK_SRCS}driver/drv_tca9554.c
 	${OBK_SRCS}driver/drv_tclAC.c
 	${OBK_SRCS}driver/drv_test.c

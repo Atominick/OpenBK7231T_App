@@ -48,20 +48,79 @@ static portTickType pulseStamp;
 #define BL0937_FAST_LOG_MIN_INTERVAL_MS 5
 #define BL0937_FAST_LOG_MAX_INTERVAL_MS 1000
 
+// Mains-interruption detector. BL0937 CF1 follows a ~100 ms moving average of
+// the voltage, so a full interruption makes the pulse rate fall at the maximum
+// possible slope, while a sag with residual voltage falls proportionally slower.
+// It trips when the 20 ms pulse count drops by BL0937_DROP_PERCENT of a frozen
+// baseline and was still near the baseline BL0937_SLOPE_MS earlier.
+#define BL0937_HISTORY_MS 512 // power of two
+#define BL0937_RATE_WINDOW_MS 20
+#define BL0937_BASE_BLOCKS 10
+#define BL0937_BASE_GAP_MS 60
+#define BL0937_BASE_MAX_SPREAD 4 // pulses per 20 ms block
+#define BL0937_BASE_MIN_PULSES 100 // per 200 ms; less means no usable mains
+#define BL0937_DROP_PERCENT 15
+#define BL0937_SLOPE_MS 30
+#define BL0937_STABLE_MS 500 // stable mains needed to arm and to re-arm after a trip
+#define BL0937_HISTORY_NEEDED (BL0937_BASE_GAP_MS + BL0937_BASE_BLOCKS * BL0937_RATE_WINDOW_MS + 2)
+
+#define BL0937_TRIP_SILENCE 1
+#define BL0937_TRIP_SLOPE 2
+
 static int8_t g_powerFailTimer = -1;
 static volatile bool g_powerFailMonitorEnabled;
-static volatile bool g_cf1PulseSeen;
+static volatile bool g_powerFailArmed;
 static volatile bool g_powerFailTripped;
 static volatile uint32_t g_powerFailEventCount;
 static volatile uint32_t g_powerReturnEventCount;
 static volatile uint32_t g_cf1SilenceMs;
-static volatile uint32_t g_powerFailTripDelayMs;
 static volatile uint32_t g_cf1FastPulseCount;
 static volatile uint32_t g_fastLogIntervalMs;
 static volatile uint32_t g_processedPowerFailEventCount;
 static volatile uint32_t g_processedPowerReturnEventCount;
+static volatile int g_powerFailTripReason;
+static volatile uint32_t g_powerFailTripPercent;
 static volatile bool g_fastTaskStarted;
 static TaskHandle_t g_fastTaskHandle;
+
+static uint16_t g_cf1History[BL0937_HISTORY_MS];
+static uint32_t g_cf1HistoryLen;
+static uint32_t g_baselinePulses; // pulses per BL0937_BASE_BLOCKS * 20 ms
+static uint32_t g_stableMs;
+
+static uint32_t BL0937_PulsesInWindow(uint32_t agoMs, uint32_t windowMs)
+{
+	uint32_t now = g_cf1HistoryLen - 1 - agoMs;
+	return (uint16_t)(g_cf1History[now % BL0937_HISTORY_MS]
+		- g_cf1History[(now - windowMs) % BL0937_HISTORY_MS]);
+}
+
+// Sums BL0937_BASE_BLOCKS 20 ms blocks ending agoMs back; true if mains looked steady.
+static bool BL0937_GetBaseline(uint32_t agoMs, uint32_t* sum)
+{
+	int k;
+	uint32_t total = 0;
+	uint32_t minBlock = 0xFFFF;
+	uint32_t maxBlock = 0;
+
+	for(k = 0; k < BL0937_BASE_BLOCKS; k++)
+	{
+		uint32_t block = BL0937_PulsesInWindow(agoMs + k * BL0937_RATE_WINDOW_MS, BL0937_RATE_WINDOW_MS);
+		total += block;
+		if(block < minBlock)
+		{
+			minBlock = block;
+		}
+		if(block > maxBlock)
+		{
+			maxBlock = block;
+		}
+	}
+	*sum = total;
+	return maxBlock - minBlock <= BL0937_BASE_MAX_SPREAD && total >= BL0937_BASE_MIN_PULSES;
+}
+
+
 
 static void BL0937_ForceRelayPinsOff(void)
 {
@@ -83,51 +142,33 @@ static void BL0937_ForceRelayPinsOff(void)
 
 static void BL0937_ProcessPowerFail(void)
 {
-	int i;
-	int relayPinCount = 0;
 	uint32_t powerFailEventCount = g_powerFailEventCount;
 	uint32_t powerReturnEventCount = g_powerReturnEventCount;
-	bool powerFailDetected = powerFailEventCount != g_processedPowerFailEventCount;
-	bool handledChannels[CHANNEL_MAX] = { false };
 
-	if(!powerFailDetected && powerReturnEventCount == g_processedPowerReturnEventCount)
+	if(powerFailEventCount != g_processedPowerFailEventCount)
 	{
-		return;
-	}
-	g_processedPowerFailEventCount = powerFailEventCount;
-	g_processedPowerReturnEventCount = powerReturnEventCount;
-
-	for(i = 0; i < PLATFORM_GPIO_MAX; i++)
-	{
-		int role = g_cfg.pins.roles[i];
-		int channel = g_cfg.pins.channels[i];
-		if(role == IOR_Relay || role == IOR_Relay_n
-			|| role == IOR_BAT_Relay || role == IOR_BAT_Relay_n)
+		g_processedPowerFailEventCount = powerFailEventCount;
+		// GPIOs are already off; channels still hold the state from before the trip.
+		CHANNEL_SetRelayInhibit(RELAY_INHIBIT_POWER_FAIL, true);
+		if(g_powerFailTripReason == BL0937_TRIP_SLOPE)
 		{
-			relayPinCount++;
-			if(channel >= 0 && channel < CHANNEL_MAX && !handledChannels[channel])
-			{
-				handledChannels[channel] = true;
-				CHANNEL_Set(channel, 0, 0);
-			}
+			addLogAdv(LOG_WARN, LOG_FEATURE_ENERGYMETER,
+				"BL0937 power-fail: relay GPIOs forced off, CF1 rate fell to %lu %% within %u ms",
+				(unsigned long)g_powerFailTripPercent, (unsigned int)BL0937_SLOPE_MS);
+		}
+		else
+		{
+			addLogAdv(LOG_WARN, LOG_FEATURE_ENERGYMETER,
+				"BL0937 power-fail: relay GPIOs forced off after %u ms without CF1 pulse",
+				(unsigned int)BL0937_POWER_FAIL_TIMEOUT_MS);
 		}
 	}
-
-	if(!powerFailDetected)
+	if(powerReturnEventCount != g_processedPowerReturnEventCount)
 	{
-		return;
-	}
-	if(relayPinCount == 0)
-	{
+		g_processedPowerReturnEventCount = powerReturnEventCount;
 		addLogAdv(LOG_WARN, LOG_FEATURE_ENERGYMETER,
-			"BL0937 power-fail detected after %lu ms without CF1 pulse, but no relay pins are configured",
-			(unsigned long)g_powerFailTripDelayMs);
-	}
-	else
-	{
-		addLogAdv(LOG_WARN, LOG_FEATURE_ENERGYMETER,
-			"BL0937 power-fail: relay GPIOs forced off after %lu ms without CF1 pulse",
-			(unsigned long)g_powerFailTripDelayMs);
+			"BL0937 mains steady for %u ms after power-fail", (unsigned int)BL0937_STABLE_MS);
+		CHANNEL_SetRelayInhibit(RELAY_INHIBIT_POWER_FAIL, false);
 	}
 }
 
@@ -143,8 +184,6 @@ static void BL0937_FastTask(void* arg)
 		uint32_t elapsedMs;
 		uint32_t pulseDelta;
 		uint32_t intervalMs = g_fastLogIntervalMs;
-
-		BL0937_ProcessPowerFail();
 
 		if(intervalMs != 0)
 		{
@@ -222,24 +261,84 @@ static commandResult_t BL0937_FastLog(const void* context, const char* cmd, cons
 
 static void BL0937_PowerFailTimer(void* arg)
 {
-	if(!g_powerFailMonitorEnabled || !g_cf1PulseSeen)
-	{
-		return;
-	}
-	if(g_powerFailTripped)
-	{
-		BL0937_ForceRelayPinsOff();
-		return;
-	}
+	uint32_t baseline;
+	uint32_t current;
+	uint32_t earlier;
+	bool steady;
+	int reason = 0;
 
+	if(!g_powerFailMonitorEnabled)
+	{
+		return;
+	}
+	g_cf1History[g_cf1HistoryLen % BL0937_HISTORY_MS] = (uint16_t)g_cf1FastPulseCount;
+	g_cf1HistoryLen++;
 	if(g_cf1SilenceMs < BL0937_POWER_FAIL_TIMEOUT_MS)
 	{
 		g_cf1SilenceMs++;
 	}
+	if(g_cf1HistoryLen < BL0937_HISTORY_NEEDED)
+	{
+		return;
+	}
+	if(g_cf1HistoryLen >= 2 * BL0937_HISTORY_MS)
+	{
+		g_cf1HistoryLen -= BL0937_HISTORY_MS; // keep the index bounded, same slots
+	}
+
+	if(g_powerFailTripped || !g_powerFailArmed)
+	{
+		if(g_powerFailTripped)
+		{
+			BL0937_ForceRelayPinsOff();
+		}
+		// Stray CF1 pulses after a mains loss must not end the trip; wait for steady mains.
+		if(BL0937_GetBaseline(0, &baseline))
+		{
+			g_stableMs++;
+		}
+		else
+		{
+			g_stableMs = 0;
+		}
+		if(g_stableMs >= BL0937_STABLE_MS)
+		{
+			g_stableMs = 0;
+			g_baselinePulses = baseline;
+			g_powerFailArmed = true;
+			if(g_powerFailTripped)
+			{
+				g_powerFailTripped = false;
+				g_powerReturnEventCount++;
+			}
+		}
+		return;
+	}
+
+	// The baseline stays frozen while mains is disturbed.
+	steady = BL0937_GetBaseline(BL0937_BASE_GAP_MS, &baseline);
+	if(steady)
+	{
+		g_baselinePulses = baseline;
+	}
+	current = BL0937_PulsesInWindow(0, BL0937_RATE_WINDOW_MS) * BL0937_BASE_BLOCKS;
+	earlier = BL0937_PulsesInWindow(BL0937_SLOPE_MS, BL0937_RATE_WINDOW_MS) * BL0937_BASE_BLOCKS;
+
 	if(g_cf1SilenceMs >= BL0937_POWER_FAIL_TIMEOUT_MS)
 	{
-		g_powerFailTripDelayMs = g_cf1SilenceMs;
+		reason = BL0937_TRIP_SILENCE;
+	}
+	else if(current * 100 <= g_baselinePulses * (100 - BL0937_DROP_PERCENT)
+		&& earlier * 300 >= g_baselinePulses * (300 - BL0937_DROP_PERCENT))
+	{
+		reason = BL0937_TRIP_SLOPE;
+	}
+	if(reason)
+	{
+		g_powerFailTripReason = reason;
+		g_powerFailTripPercent = g_baselinePulses ? current * 100 / g_baselinePulses : 0;
 		g_powerFailTripped = true;
+		g_stableMs = 0;
 		g_powerFailEventCount++;
 		BL0937_ForceRelayPinsOff();
 	}
@@ -252,14 +351,8 @@ void HlwCf1Interrupt(int pinNum)
 #if PLATFORM_LN882H
 	if(g_powerFailMonitorEnabled)
 	{
-		if(g_powerFailTripped)
-		{
-			g_powerReturnEventCount++;
-		}
 		g_cf1SilenceMs = 0;
-		g_cf1PulseSeen = true;
 		g_cf1FastPulseCount++;
-		g_powerFailTripped = false;
 	}
 #endif
 }
@@ -338,7 +431,9 @@ void BL0937_Init_Pins()
 #if PLATFORM_LN882H
 	if(g_powerFailMonitorEnabled)
 	{
-		g_cf1PulseSeen = true;
+		// Re-attached CF1 needs steady mains again before the detector arms.
+		g_powerFailArmed = false;
+		g_stableMs = 0;
 		g_cf1SilenceMs = 0;
 	}
 #endif
@@ -360,8 +455,11 @@ void BL0937_Init(void)
 	if(g_powerFailTimer >= 0)
 	{
 		g_powerFailMonitorEnabled = true;
-		g_cf1PulseSeen = false;
+		g_powerFailArmed = false;
 		g_powerFailTripped = false;
+		g_cf1HistoryLen = 0;
+		g_baselinePulses = 0;
+		g_stableMs = 0;
 		g_powerFailEventCount = 0;
 		g_powerReturnEventCount = 0;
 		g_processedPowerFailEventCount = 0;
@@ -409,8 +507,9 @@ void BL0937_Init(void)
 	{
 		HAL_HWTimerStart(g_powerFailTimer);
 		addLogAdv(LOG_WARN, LOG_FEATURE_ENERGYMETER,
-			"BL0937 fast power-fail monitoring enabled: voltage mode only, relay GPIO cutoff after %u ms without CF1 pulses",
-			(unsigned int)BL0937_POWER_FAIL_TIMEOUT_MS);
+			"BL0937 fast power-fail monitoring enabled: voltage mode only, relay GPIO cutoff on CF1 rate drop of %u %% within %u ms or %u ms without CF1 pulses; arms after %u ms of steady mains",
+			(unsigned int)BL0937_DROP_PERCENT, (unsigned int)BL0937_SLOPE_MS,
+			(unsigned int)BL0937_POWER_FAIL_TIMEOUT_MS, (unsigned int)BL0937_STABLE_MS);
 	}
 #endif
 }
@@ -418,10 +517,7 @@ void BL0937_Init(void)
 void BL0937_RunQuickTick(void)
 {
 #if PLATFORM_LN882H
-	if(g_fastTaskStarted)
-	{
-		return;
-	}
+	// Runs on the main loop: channel changes and MQTT publishes are not thread-safe.
 	BL0937_ProcessPowerFail();
 #endif
 }

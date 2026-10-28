@@ -1,6 +1,7 @@
 #include "../i2c/drv_i2c_public.h"
 #include "../logging/logging.h"
 #include "drv_bl0937.h"
+#include "drv_sentinel.h"
 #include "drv_bl0942.h"
 #include "drv_bl0939.h"
 #include "drv_bl_shared.h"
@@ -685,7 +686,7 @@ static driver_t g_drivers[] = {
 #if ENABLE_DRIVER_BL0937
 	//drvdetail:{"name":"BL0937",
 	//drvdetail:"title":"TODO",
-	//drvdetail:"descr":"BL0937 is a power-metering chip which uses custom protocol to report data. It requires setting 3 pins in pin config: CF, CF1 and SEL. On LN882H, fast voltage monitoring keeps SEL on voltage and turns off all configured relay outputs after 5 ms without CF1 pulses; current measurements are unavailable in this mode. Use BL0937FastLog 10 to stream CSV voltage estimates over UART every 10 ms (5-1000 ms supported, 0 disables). Verify the pulse timeout and physical relay contact delay on the target hardware.",
+	//drvdetail:"descr":"BL0937 is a power-metering chip which uses custom protocol to report data. It requires setting 3 pins in pin config: CF, CF1 and SEL. On LN882H, fast voltage monitoring keeps SEL on voltage and turns off all configured relay outputs when the 20 ms CF1 pulse rate drops by 15 % within 30 ms (mains interruption, e.g. ATS transfer) or after 5 ms without CF1 pulses; current measurements are unavailable in this mode. Monitoring arms after 500 ms of steady mains. After a trip relays stay off until mains is steady for 500 ms; with flag 52 they are then restored to their previous state. Use BL0937FastLog 10 to stream CSV voltage estimates over UART every 10 ms (5-1000 ms supported, 0 disables). Verify the pulse timeout and physical relay contact delay on the target hardware.",
 	//drvdetail:"requires":""}
 	{ "BL0937",                              // Driver Name
 	BL0937_Init,                             // Init
@@ -966,6 +967,22 @@ static driver_t g_drivers[] = {
 	DRV_DGR_RunQuickTick,                    // runQuickTick
 	DRV_DGR_Shutdown,                        // stopFunction
 	DRV_DGR_OnChannelChanged,                // onChannelChanged
+	NULL,                                    // onHassDiscovery
+	false,                                   // loaded
+	},
+#endif
+#if ENABLE_DRIVER_SENTINEL
+	//drvdetail:{"name":"Sentinel",
+	//drvdetail:"title":"TODO",
+	//drvdetail:"descr":"Mains sentinel over UDP broadcast (port 4451). On a mains-only device run SentinelBeacon 200; on guarded devices run SentinelGuard [SentinelIP]: relays stay off until 3 beacons arrive and switch off when no beacon came for 1000 ms. With flag 52 relays return to the requested state when the sentinel is confirmed again.",
+	//drvdetail:"requires":""}
+	{ "Sentinel",                            // Driver Name
+	Sentinel_Init,                           // Init
+	NULL,                                    // onEverySecond
+	Sentinel_AppendInformationToHTTPIndexPage, // appendInformationToHTTPIndexPage
+	Sentinel_RunQuickTick,                   // runQuickTick
+	Sentinel_Shutdown,                       // stopFunction
+	NULL,                                    // onChannelChanged
 	NULL,                                    // onHassDiscovery
 	false,                                   // loaded
 	},

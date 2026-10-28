@@ -1424,8 +1424,9 @@ typedef struct pinsState_s {
 #define OBK_FLAG_HTTP_NO_ONOFF_WORDS				49
 #define OBK_FLAG_MQTT_NEVERAPPENDGET				50
 #define OBK_FLAG_WIFI_ENHANCED_FAST_CONNECT			51
+#define OBK_FLAG_POWER_FAIL_RESTORE_RELAYS			52
 
-#define OBK_TOTAL_FLAGS 52
+#define OBK_TOTAL_FLAGS 53
 
 #define LOGGER_FLAG_MQTT_DEDUPER					1
 #define LOGGER_FLAG_POWER_SAVE						2
@@ -1804,6 +1805,11 @@ void CHANNEL_ClearAllChannels();
 // CHANNEL_SET_FLAG_*
 void CHANNEL_Set_Ex(int ch, int iVal, int iFlags, int ausemovingaverage);
 void CHANNEL_Set(int ch, int iVal, int iFlags);
+// Relay inhibit sources for CHANNEL_SetRelayInhibit (bit mask)
+#define RELAY_INHIBIT_POWER_FAIL	1
+#define RELAY_INHIBIT_SENTINEL		2
+void CHANNEL_SetRelayInhibit(int source, bool bInhibit);
+int CHANNEL_GetRelayInhibit();
 void CHANNEL_SetSmart(int ch, float fVal, int iFlags);
 void CHANNEL_Set_FloatPWM(int ch, float fVal, int iFlags);
 void CHANNEL_Add(int ch, int iVal);

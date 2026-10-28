@@ -1,0 +1,11 @@
+# Local test MQTT broker for OpenBeken devices.
+# Run: scripts\.venv\Scripts\amqtt.exe -c scripts\mqtt_broker.yaml
+listeners:
+  default:
+    type: tcp
+    bind: 0.0.0.0:1883
+plugins:
+  amqtt.plugins.authentication.AnonymousAuthPlugin:
+    allow_anonymous: true
+  amqtt.plugins.sys.broker.BrokerSysPlugin:
+    sys_interval: 0

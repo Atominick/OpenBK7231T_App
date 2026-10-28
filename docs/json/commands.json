@@ -261,6 +261,15 @@
     "examples": "berry 1+2"
   },
   {
+    "name": "BL0937FastLog",
+    "args": "[IntervalMs]",
+    "descr": "On LN882H, prints CSV voltage estimates from BL0937 CF1 pulse counts over UART at the selected interval (5-1000 ms). Set 0 to disable. The CSV columns are uptime in ms, estimated voltage, pulse count in the interval, and ms since the last CF1 pulse. Current measurement is unavailable while fast voltage monitoring is active.",
+    "fn": "BL0937_FastLog",
+    "file": "driver/drv_bl0937.c",
+    "requires": "",
+    "examples": "BL0937FastLog 10"
+  },
+  {
     "name": "BL0939_ClearEnergy",
     "args": "[a|b|all]",
     "descr": "Clear BL0939 accumulated import/export kWh counters.",
@@ -2275,15 +2284,6 @@
     "file": "cmnds/cmd_tasmota.c",
     "requires": "",
     "examples": ""
-  },
-  {
-    "name": "BL0937FastLog",
-    "args": "[IntervalMs]",
-    "descr": "On LN882H, prints CSV voltage estimates from BL0937 CF1 pulse counts over UART at the selected interval (5-1000 ms). Set 0 to disable. The CSV columns are uptime in ms, estimated voltage, pulse count in the interval, and ms since the last CF1 pulse. Current measurement is unavailable while fast voltage monitoring is active.",
-    "fn": "BL0937_FastLog",
-    "file": "driver/drv_bl0937.c",
-    "requires": "",
-    "examples": "BL0937FastLog 10"
   },
   {
     "name": "PowerMax",
